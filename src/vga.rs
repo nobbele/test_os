@@ -46,20 +46,6 @@ struct ScreenChar {
     color_code: ColorCode,
 }
 
-impl core::ops::Deref for ScreenChar {
-    type Target = ScreenChar;
-
-    fn deref(&self) -> &Self::Target {
-        self
-    }
-}
-
-impl core::ops::DerefMut for ScreenChar {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self
-    }
-}
-
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 
@@ -163,7 +149,7 @@ impl core::fmt::Write for Writer {
 #[doc(hidden)]
 pub fn _print(args: core::fmt::Arguments) {
     use core::fmt::Write;
-    WRITER.lock().write_fmt(args).unwrap();
+    x86_64::instructions::interrupts::without_interrupts(|| WRITER.lock().write_fmt(args).unwrap());
 }
 
 #[macro_export]
@@ -178,8 +164,10 @@ macro_rules! println {
 }
 
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
-    use crate::serial_println;
+    #[allow(unused_imports)]
+    use core::fmt::Write;
 
     #[test_case]
     fn test_color_guard() {
@@ -200,16 +188,34 @@ mod tests {
     }
 
     #[test_case]
+    fn test_println_output() {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut writer = WRITER.lock();
+            writeln!(writer).expect("writeln failed");
+            let start_row = writer.position.1;
+            let s = "Foo Bar";
+            writeln!(writer, "{}", s).expect("writeln failed");
+            for (idx, c) in s.chars().enumerate() {
+                let screen_char = writer.buffer.0[start_row][idx].read().ascii_character;
+                assert_eq!(c, screen_char as char);
+            }
+        });
+    }
+
+    #[test_case]
     fn test_println_many() {
-        for i in 0..200 {
-            println!("Hello World! {}", i);
-        }
-        let last_text = "Hello World! 199";
-        for (idx, c) in last_text.chars().enumerate() {
-            let vga_char = WRITER.lock().buffer.0[BUFFER_HEIGHT - 2][idx]
-                .read()
-                .ascii_character;
-            assert_eq!(c as u8, vga_char);
-        }
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut writer = WRITER.lock();
+            for i in 0..200 {
+                writeln!(writer, "Hello World! {}", i).expect("writeln failed");
+            }
+            let last_text = "Hello World! 199";
+            for (idx, c) in last_text.chars().enumerate() {
+                let vga_char = writer.buffer.0[BUFFER_HEIGHT - 2][idx]
+                    .read()
+                    .ascii_character;
+                assert_eq!(c, vga_char as char);
+            }
+        });
     }
 }
